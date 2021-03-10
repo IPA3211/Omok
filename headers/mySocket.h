@@ -349,3 +349,8 @@ void MySocket::errorHandler(std::string message) {
 	std::cout << message << std::endl;
 	exit(1);
 }
+
+void errorHandler(std::string message) {
+	std::cout << message << std::endl;
+	exit(1);
+}

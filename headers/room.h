@@ -8,6 +8,22 @@
 
 #define ALLDATA 0
 #define ADDRDATA 1
+#define NAMEDATA 2
+
+struct roomInfo
+{
+	int index;
+	int status;
+	bool isLocked;
+	std::string name;
+
+	roomInfo(int i, int s, bool b, std::string n) {
+		index = i;
+		status = s;
+		isLocked = b;
+		name = n;
+	}
+};
 
 class room {
 public:
@@ -32,7 +48,7 @@ public:
 
 private:
 	std::string _ip;
-	short _port;
+	unsigned short _port;
 	std::string _name;
 	int _status;
 	std::string _passwd;
@@ -114,6 +130,13 @@ std::string room::serializeData(int type) {
 			+ std::to_string(_status) + ":"
 			+ std::to_string(isLocked);
 
+	case NAMEDATA:
+		isLocked = (0 != _passwd.size()) ? 1 : 0;
+
+		return 
+			std::to_string(_status) + ":"
+			+ std::to_string(isLocked) + ":"
+			+_name;
 	default:
 		break;
 	}

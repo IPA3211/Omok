@@ -9,26 +9,29 @@
 
 struct Client {
 	bool _isConnected = false;
+	int ownRoomIndex = -1;
 	std::shared_ptr<MySocket> _sock;
 	std::string _name;
 
 	Client(bool a, std::shared_ptr<MySocket> b) {
 		_isConnected = a;
 		_sock = b;
+		ownRoomIndex = -1;
 	}
 
 	Client() {
 		_isConnected = false;
 		_sock = std::make_shared<MySocket>(TCP);
 		_name = "";
+		ownRoomIndex = -1;
 	}
 };
 
 struct roomClient {
-	std::shared_ptr<Client> _client;
+	Client* _client;
 	room _roomData;
 
-	roomClient(std::shared_ptr<Client> client, room r) {
+	roomClient(Client* client, room r) {
 		_client = client;
 		_roomData = r;
 	}
@@ -218,6 +221,11 @@ void serveClient(int index) {
 			clients[index]._isConnected = false;
 			clients[index]._sock = NULL;
 			clients[index]._name.clear();
+			
+			if (clients[index].ownRoomIndex != -1)
+				roomClients[clients[index].ownRoomIndex]._roomData.setStatus(ROOM_STATUS_ERR);
+
+			clients[index].ownRoomIndex = -1;
 
 			for (int i = 0; i < MAX_PLAYER; i++) {
 				if (clients[i]._isConnected)
@@ -226,66 +234,89 @@ void serveClient(int index) {
 			break;
 		}
 
-		//when client want to make a room ::mkr::name:passwd
-		else if (buffer.substr(0, 7) == "::mkr::") {
-			for (int i = 0; i < MAX_PLAYER; i++) {
-				if (roomClients[i]._roomData.getStatus() == ROOM_STATUS_ERR) {
-					std::lock_guard<std::recursive_mutex> vector_lock(socketVectorLock);
-					roomClients[i]._roomData.init(inet_ntoa(clnt.getAddr().sin_addr), clnt.getAddr().sin_port,
-													buffer.substr(7, buffer.find(':')), ROOM_STATUS_IDLE, buffer.substr(buffer.find(':') + 1));
-					clnt.send("OK");
+		if (buffer.substr(0, 2) == "::") {
+			//when client want to make a room ::mkr::name:passwd
+			if (buffer.substr(0, 7) == "::mkr::") {
+				for (int i = 0; i < MAX_PLAYER; i++) {
+					if (roomClients[i]._roomData.getStatus() == ROOM_STATUS_ERR) {
+						std::lock_guard<std::recursive_mutex> vector_lock(socketVectorLock);
+						buffer.pop_back();
+						buffer = buffer.substr(7);
+
+						roomClients[i]._roomData.init(inet_ntoa(clnt.getAddr().sin_addr), 7722,
+							buffer.substr(0, buffer.find(':')), ROOM_STATUS_IDLE, buffer.substr(buffer.find(':') + 1));
+
+						roomClients[i]._client = &clients[index];
+						
+						clients[index].ownRoomIndex = i;
+
+						clnt.send("::mkr::OK");
+						break;
+					}
+				}
+			}
+			
+			//when client delete room
+			if (buffer.substr(0, 7) == "::dlr::") {
+				roomClients[clients[index].ownRoomIndex]._roomData.setStatus(ROOM_STATUS_ERR);
+				roomClients[clients[index].ownRoomIndex]._client = NULL;
+				clients[index].ownRoomIndex = -1;
+
+				clnt.send("::dlr::OK");
+			}
+			
+			//when client want to access a room
+			//client send ex) "::acr::7:979"
+			else if (buffer.substr(0, 7) == "::acr::") {
+				buffer.pop_back();
+				std::string temp = buffer.substr(7);
+				int roomNum = std::stoi(temp.substr(0, temp.find(':')));
+				temp = temp.substr(temp.find(':') + 1);
+
+				for (int i = 0; i < MAX_PLAYER; i++) {
+					switch (roomClients[roomNum]._roomData.getStatus())
+					{
+					case ROOM_STATUS_IDLE:
+						if (roomClients[roomNum]._roomData.getPasswd() == temp)
+							clnt.send(roomClients[roomNum]._roomData.serializeData(ADDRDATA));
+						else
+							clnt.send("::acr::PASSERR");
+							break;
+					case ROOM_STATUS_PLAY:
+						clnt.send("::acr::PLAYING");
+						break;
+					case ROOM_STATUS_ERR:
+						clnt.send("::acr::NOROOM");
+						break;
+					default:
+						clnt.send("::acr::NOROOM");
+						break;
+					}
+				}
+			}
+			
+			//when client want room list
+			else if (buffer.substr(0, 7) == "::rlt::") {
+				for (int i = 0; i < MAX_PLAYER; i++) {
+					switch (roomClients[i]._roomData.getStatus())
+					{
+					case ROOM_STATUS_IDLE:
+					case ROOM_STATUS_PLAY:
+						if (roomClients[i]._client->ownRoomIndex == i) {
+							clnt.send("::rlt::" + std::to_string(i) + ":" + roomClients[i]._roomData.serializeData(NAMEDATA));
+							Sleep(1);
+						}
+						else {
+							roomClients[i]._roomData.setStatus(ROOM_STATUS_ERR);
+							roomClients[i]._client = NULL;
+						}
+						break;
+					default:
+						break;
+					}
 				}
 			}
 		}
-		//when client want to access a room
-		//client send ex) "::acr::7:979"
-		else if (buffer.substr(0, 7) == "::acr::") {
-			std::string temp = buffer.substr(7);
-			int roomNum = std::stoi(temp.substr(0, temp.find(':')));
-			temp = temp.substr(temp.find(':') + 1);
-
-			for (int i = 0; i < MAX_PLAYER; i++) {
-				switch (roomClients[roomNum]._roomData.getStatus())
-				{
-				case ROOM_STATUS_IDLE:
-					if(roomClients[roomNum]._roomData.getPasswd() == temp)
-					clnt.send(roomClients[roomNum]._roomData.serializeData(ADDRDATA));
-					break;
-				case ROOM_STATUS_PLAY:
-					clnt.send("PLAYING");
-					break;
-				case ROOM_STATUS_ERR:
-					clnt.send("NOROOM");
-					break;
-				default:
-					clnt.send("NOROOM");
-					break;
-				}
-			}
-		}
-		//when client want room list
-		else if (buffer.substr(0, 7) == "::rlt::") {
-			for (int i = 0; i < MAX_PLAYER; i++) {
-				switch (roomClients[std::stoi(buffer.substr(7))]._roomData.getStatus())
-				{
-				case ROOM_STATUS_IDLE:
-					clnt.send(roomClients[std::stoi(buffer.substr(7))]._roomData.serializeData(ALLDATA));
-					break;
-				case ROOM_STATUS_PLAY:
-					clnt.send(roomClients[std::stoi(buffer.substr(7))]._roomData.serializeData(ALLDATA));
-					break;
-				case ROOM_STATUS_ERR:
-					break;
-				default:
-					break;
-				}
-			}
-
-			clnt.send("LTEND");
-		}
-
-		//when client want other client list
-
 		//send message to every clients
 		else
 		{
